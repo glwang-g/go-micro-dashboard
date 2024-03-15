@@ -1,13 +1,20 @@
 package account
 
 import (
+	"log"
 	"time"
+	"os"
 
+	"github.com/casbin/casbin/v2"
+	"github.com/casbin/casbin/v2/model"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/render"
 	"github.com/go-micro/dashboard/config"
 	"github.com/go-micro/dashboard/handler/route"
+
+	xormadapter "github.com/casbin/xorm-adapter/v2"
+    _ "github.com/go-sql-driver/mysql"
 )
 
 type service struct{}
@@ -60,6 +67,14 @@ func (s *service) Login(ctx *gin.Context) {
 		ctx.Render(400, render.String{Format: err.Error()})
 		return
 	}
+
+
+	if d, err := ValidationAuthority("admin", "data2", "write"); nil != err||!d {
+		log.Printf("ERROR:{},{}", d, err)
+		ctx.Render(401, render.String{Format: err.Error()})
+		return
+	}
+
 	ctx.JSON(200, loginResponse{Token: signedToken})
 }
 
@@ -77,4 +92,41 @@ type profileResponse struct {
 // @Router /api/account/profile [get]
 func (s *service) Profile(ctx *gin.Context) {
 	ctx.JSON(200, profileResponse{Name: config.GetAuthConfig().Username})
+}
+ 
+// 使用Gorm验证访问权限
+func ValidationAuthority(sub string, obj string, act string) (bool, error) {
+	a, err := xormadapter.NewAdapter("mysql", "root:123456@tcp(127.0.0.1:3306)/")
+	if err != nil {
+		log.Fatalf("error: adapter: %s", err)
+	}
+
+	m, err := model.NewModelFromString(`
+	[request_definition]
+	r = sub, obj, act
+
+	[policy_definition]
+	p = sub, obj, act
+
+	[policy_effect]
+	e = some(where (p.eft == allow))
+
+	[matchers]
+	m = r.sub == p.sub && r.obj == p.obj && r.act == p.act 
+	`)
+	if err != nil {
+		log.Fatalf("error: model: %s", err)
+	}
+	e, _ := casbin.NewEnforcer(m, a)
+	
+	a.LoadPolicy(m)
+	log.Printf("Actions:{}", e.GetAllActions())
+  	return e.Enforce(sub, obj, act)
+}
+
+func fileExist(fileName string) bool {
+	_, err := os.Stat(fileName)
+	if err == nil { return true}; 
+	if os.IsNotExist(err) { return false}
+	return false
 }
